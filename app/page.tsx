@@ -331,19 +331,6 @@ export default function LandingPage() {
             ))}
           </div>
 
-          {/* Metrics */}
-          <div className="mt-12 grid grid-cols-3 gap-6 border-t border-blue-500 pt-10">
-            {[
-              { value: "+12%", label: "Incremento en ticket promedio" },
-              { value: "+18%", label: "Aumento en margen total" },
-              { value: "2 sem.", label: "Tiempo promedio de onboarding" },
-            ].map((m) => (
-              <div key={m.label} className="text-center">
-                <p className="text-3xl font-bold text-white">{m.value}</p>
-                <p className="text-sm text-blue-200 mt-1">{m.label}</p>
-              </div>
-            ))}
-          </div>
         </div>
       </section>
 
@@ -485,9 +472,9 @@ export default function LandingPage() {
           <div className="mb-10">
             <div className="flex items-center gap-2 mb-6">
               <Clock className="h-5 w-5 text-slate-600" />
-              <h3 className="text-xl font-bold">Frecuencia de extracción — 3 fases de integración</h3>
+              <h3 className="text-xl font-bold">Frecuencia de extracción — 2 fases de integración</h3>
             </div>
-            <div className="grid grid-cols-1 gap-5 sm:grid-cols-3">
+            <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
               {/* Fase 1 */}
               <div className="rounded-xl border-2 border-blue-200 bg-white p-6 relative">
                 <div className="absolute -top-3 left-4 rounded-full bg-blue-600 text-white text-xs font-bold px-3 py-1">
@@ -517,7 +504,7 @@ export default function LandingPage() {
                 </div>
                 <div className="rounded-lg bg-blue-50 p-3">
                   <p className="text-xs font-semibold text-blue-700 mb-0.5">Tiempo de implementación</p>
-                  <p className="text-lg font-black text-blue-800">2–5 días</p>
+                  <p className="text-lg font-black text-blue-800">~4 semanas</p>
                   <p className="text-xs text-blue-600">Sin modificar el sistema POS</p>
                 </div>
                 <div className="mt-3 text-xs text-muted-foreground">
@@ -554,7 +541,7 @@ export default function LandingPage() {
                 </div>
                 <div className="rounded-lg bg-purple-50 p-3">
                   <p className="text-xs font-semibold text-purple-700 mb-0.5">Tiempo de implementación</p>
-                  <p className="text-lg font-black text-purple-800">2–4 semanas</p>
+                  <p className="text-lg font-black text-purple-800">~6 semanas</p>
                   <p className="text-xs text-purple-600">Requiere API en el POS</p>
                 </div>
                 <div className="mt-3 text-xs text-muted-foreground">
@@ -562,72 +549,6 @@ export default function LandingPage() {
                 </div>
               </div>
 
-              {/* Fase 3 */}
-              <div className="rounded-xl border-2 border-green-200 bg-white p-6 relative">
-                <div className="absolute -top-3 left-4 rounded-full bg-green-600 text-white text-xs font-bold px-3 py-1">
-                  Fase 3 — Tiempo Real
-                </div>
-                <div className="flex items-center gap-2 mb-3 mt-2">
-                  <div className="rounded-lg bg-green-50 p-2">
-                    <Radio className="h-5 w-5 text-green-600" />
-                  </div>
-                  <div>
-                    <p className="font-bold text-sm">Streaming</p>
-                    <p className="text-xs text-muted-foreground">Por transacción</p>
-                  </div>
-                </div>
-                <div className="space-y-2 mb-4">
-                  {[
-                    "Cada ticket se procesa al cerrarse",
-                    "Dashboard actualizado en segundos",
-                    "Alertas instantáneas de fraude o anomalías",
-                    "Base para ML y recomendaciones dinámicas",
-                  ].map((item) => (
-                    <div key={item} className="flex items-start gap-2 text-xs text-slate-600">
-                      <CheckCircle2 className="h-3.5 w-3.5 text-green-500 shrink-0 mt-0.5" />
-                      {item}
-                    </div>
-                  ))}
-                </div>
-                <div className="rounded-lg bg-green-50 p-3">
-                  <p className="text-xs font-semibold text-green-700 mb-0.5">Tiempo de implementación</p>
-                  <p className="text-lg font-black text-green-800">6–12 semanas</p>
-                  <p className="text-xs text-green-600">Para operaciones maduras</p>
-                </div>
-                <div className="mt-3 text-xs text-muted-foreground">
-                  <strong className="text-slate-700">Mecanismo:</strong> AWS Kinesis Data Streams + Lambda + DynamoDB Streams + EventBridge
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Compatible formats */}
-          <div className="rounded-xl border bg-white shadow-sm p-6">
-            <div className="flex items-center gap-2 mb-4">
-              <Database className="h-4 w-4 text-slate-600" />
-              <h3 className="font-semibold text-sm">Formatos y sistemas compatibles (Fase 1)</h3>
-              <span className="ml-auto text-xs text-blue-600 font-medium">Recomendado para el piloto</span>
-            </div>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-              {[
-                { formato: "CSV / Excel", detalle: "Exportación manual o programada desde el POS", color: "bg-green-50 border-green-200 text-green-800" },
-                { formato: "API REST", detalle: "Endpoint que consulte ventas por sucursal y fecha", color: "bg-blue-50 border-blue-200 text-blue-800" },
-                { formato: "Base de datos SQL", detalle: "Acceso de solo lectura a SQL Server, MySQL o PostgreSQL", color: "bg-purple-50 border-purple-200 text-purple-800" },
-                { formato: "FTP / SFTP", detalle: "Depósito automático de archivos en servidor seguro", color: "bg-amber-50 border-amber-200 text-amber-800" },
-              ].map((f) => (
-                <div key={f.formato} className={`rounded-lg border p-3 ${f.color}`}>
-                  <p className="font-semibold text-xs mb-1">{f.formato}</p>
-                  <p className="text-xs opacity-80 leading-relaxed">{f.detalle}</p>
-                </div>
-              ))}
-            </div>
-            <div className="mt-4 pt-4 border-t flex flex-wrap gap-4 text-xs text-muted-foreground">
-              <span className="font-semibold text-slate-700">Sistemas POS documentados:</span>
-              {["Microsip", "Aspel SAE", "SAP Business One", "SoftRestaurant", "BIND ERP", "Contpaq", "Exportación Excel genérica"].map((s) => (
-                <span key={s} className="flex items-center gap-1">
-                  <Check className="h-3 w-3 text-green-500" />{s}
-                </span>
-              ))}
             </div>
           </div>
         </div>
