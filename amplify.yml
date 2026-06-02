@@ -6,6 +6,9 @@ frontend:
         - npm ci
     build:
       commands:
+        # Exponer las env vars del servidor (POS_*) al runtime SSR de Next.js.
+        # Amplify las inyecta en build pero no en runtime; .env.production sí las carga.
+        - env | grep -e '^POS_' >> .env.production || true
         - npm run build
   artifacts:
     baseDirectory: .next
