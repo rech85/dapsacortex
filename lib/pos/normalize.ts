@@ -38,7 +38,10 @@ export function toISO(fecha?: string | null, hora?: string | null): string | nul
 
 export function normalizeRetail(t: TicketRetailIn, recibidoEn: string): Venta {
   const h = t.encabezado ?? ({} as TicketRetailIn["encabezado"]);
-  const suc = (str(h.Suc) ?? "").padStart(3, "0");
+  const sucRaw = str(h.Suc) ?? "";
+  // El código de sucursal puede ser numérico ("001") o alfanumérico ("ABA").
+  // Sólo rellenamos con ceros cuando es puramente numérico.
+  const suc = /^\d+$/.test(sucRaw) ? sucRaw.padStart(3, "0") : sucRaw;
   const caja = str(h.Caja) ?? "";
   const fecOpe = str(h.FecOpe) ?? "";
   const numTra = str(h.NumTra) ?? "";
@@ -142,8 +145,9 @@ export function normalizeMostrador(t: TicketMostradorIn, recibidoEn: string): Ve
 // Valida que la venta normalizada tenga las claves mínimas para identificarse.
 export function validarVenta(v: Venta): string | null {
   if (v.modulo === "retail") {
+    // Suc/Caja/NumTra pueden ser alfanuméricos; sólo FecOpe debe ser YYYYMMDD.
     const ok = v.sucursal_id && v.caja_serie && v.venta_id.split(":").every((p) => p.length > 0) &&
-      /retail:\d{3}:\d{8}:.+:.+/.test(v.venta_id);
+      /^retail:[^:]+:\d{8}:[^:]+:[^:]+$/.test(v.venta_id);
     if (!ok) return "faltan claves retail (Suc/FecOpe/Caja/NumTra) o FecOpe no es YYYYMMDD";
   } else {
     if (!str(v.caja_serie) || v.venta_id === "mostrador::") return "faltan claves mostrador (serie/num)";
