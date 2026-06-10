@@ -9,7 +9,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authenticate } from "@/lib/pos/auth";
 import { normalizeRetail, normalizeMostrador, validarVenta } from "@/lib/pos/normalize";
-import { persistVentas } from "@/lib/pos/store";
+import { persistVentas, persistRaw, type RawRecord } from "@/lib/pos/store";
 import type {
   IngestPayload,
   IngestResult,
@@ -75,8 +75,12 @@ export async function POST(request: NextRequest) {
   const recibidoEn = new Date().toISOString();
   const ventas: Venta[] = [];
   const errores: IngestResult["errores"] = [];
+  const raws: RawRecord[] = [];
 
   payload.tickets.forEach((t, indice) => {
+    // Archivamos SIEMPRE el ticket crudo, aceptado o rechazado, para no perder
+    // nada y poder re-procesar si la normalización cambia.
+    const rawBase = { modulo: payload.modulo, recibido_en: recibidoEn, lote_id: payload.lote_id ?? null, indice, raw: t };
     try {
       const venta =
         payload.modulo === "retail"
@@ -86,16 +90,28 @@ export async function POST(request: NextRequest) {
       const motivo = validarVenta(venta);
       if (motivo) {
         errores.push({ indice, venta_id: venta.venta_id, motivo });
+        raws.push({ ...rawBase, estado: "rechazado", motivo, venta_id: venta.venta_id });
         return;
       }
       ventas.push(venta);
+      raws.push({ ...rawBase, estado: "aceptado", venta_id: venta.venta_id });
     } catch (e) {
-      errores.push({ indice, motivo: `error al normalizar: ${(e as Error).message}` });
+      const motivo = `error al normalizar: ${(e as Error).message}`;
+      errores.push({ indice, motivo });
+      raws.push({ ...rawBase, estado: "rechazado", motivo });
     }
   });
 
-  // 5) Persistencia (idempotente por venta_id)
+  // 5) Persistencia. El raw es best-effort (respaldo); las ventas normalizadas
+  // son la fuente primaria de la API y sí deben confirmarse.
   let staged = false;
+  let rawError: string | null = null;
+  try {
+    await persistRaw(raws);
+  } catch (e) {
+    // No tumbamos la ingesta por un fallo del respaldo, pero lo reportamos.
+    rawError = (e as Error).message;
+  }
   try {
     const res = await persistVentas(ventas);
     staged = res.staged;
@@ -114,6 +130,7 @@ export async function POST(request: NextRequest) {
     errores,
     lote_id: payload.lote_id ?? null,
     ...(staged ? { staging: true } : {}),
+    ...(rawError ? { raw_warning: rawError } : {}),
   };
 
   // 207 si hubo aceptados y rechazados; 200 si todo ok; 422 si todo falló

@@ -3,10 +3,11 @@
 // Future: Stored associations in DynamoDB from nightly batch job
 import { NextRequest, NextResponse } from "next/server"
 import { computeCanasta } from "@/lib/analytics"
+import { getTickets } from "@/lib/data-source"
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url)
   const sucursal = searchParams.get("sucursal") || undefined
-  const data = computeCanasta(sucursal)
+  const data = computeCanasta(await getTickets(), sucursal)
   return NextResponse.json(data)
 }

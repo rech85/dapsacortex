@@ -1,8 +1,11 @@
 // lib/analytics.ts
-// NOTE: In production, these computations will run in AWS Lambda functions
-// and results will be cached in DynamoDB / ElastiCache
+// Cálculos de inteligencia sobre un conjunto de `Ticket`. Es PURA: no sabe de
+// dónde vienen los tickets (mock o DynamoDB) — eso lo decide lib/data-source.ts
+// y se los inyecta. El universo de productos y sucursales se deriva de los
+// propios tickets; el margen se resuelve vía catálogo (0 si se desconoce).
 
-import { generateMockTickets, PRODUCTOS_BASE, SUCURSALES, TIPOS_CLIENTE, type Ticket } from "./mock-data";
+import { TIPOS_CLIENTE, type Ticket } from "./mock-data";
+import { margenSku } from "./pos/catalog";
 
 export interface OverviewStats {
   ventasTotales: number;
@@ -98,22 +101,54 @@ export interface AutoInsight {
   }[];
 }
 
-// ── Overview ──────────────────────────────────────────────────────────────
-export function computeOverview(sucursalFilter?: string): OverviewStats {
-  let tickets = generateMockTickets();
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function filtrarPorSucursal(tickets: Ticket[], sucursalFilter?: string): Ticket[] {
   if (sucursalFilter && sucursalFilter !== "todas") {
-    tickets = tickets.filter((t) => t.sucursal_id === sucursalFilter);
+    return tickets.filter((t) => t.sucursal_id === sucursalFilter);
   }
+  return tickets;
+}
+
+interface ProdInfo {
+  id: string;
+  nombre: string;
+  categoria: string;
+  margen: number;
+}
+
+// Deriva el catálogo de productos presente en los tickets (id, nombre, categoría
+// del ticket; margen del catálogo de enriquecimiento).
+function productosDeTickets(tickets: Ticket[]): ProdInfo[] {
+  const map = new Map<string, ProdInfo>();
+  for (const t of tickets) {
+    for (const p of t.productos) {
+      if (!map.has(p.id)) {
+        map.set(p.id, { id: p.id, nombre: p.nombre, categoria: p.categoria, margen: margenSku(p.id) });
+      }
+    }
+  }
+  return Array.from(map.values());
+}
+
+function nombrePorId(tickets: Ticket[]): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const t of tickets) for (const p of t.productos) if (!map.has(p.id)) map.set(p.id, p.nombre);
+  return map;
+}
+
+// ── Overview ──────────────────────────────────────────────────────────────────
+export function computeOverview(allTickets: Ticket[], sucursalFilter?: string): OverviewStats {
+  const tickets = filtrarPorSucursal(allTickets, sucursalFilter);
 
   const ventasTotales = tickets.reduce((s, t) => s + t.total, 0);
   const numTickets = tickets.length;
-  const ticketPromedio = ventasTotales / numTickets;
+  const ticketPromedio = numTickets ? ventasTotales / numTickets : 0;
 
   const productosSet = new Set<string>();
   tickets.forEach((t) => t.productos.forEach((p) => productosSet.add(p.id)));
   const productosUnicos = productosSet.size;
 
-  // Tickets por día (last 30 days)
   const byDia: Record<string, { tickets: number; ventas: number }> = {};
   tickets.forEach((t) => {
     if (!byDia[t.fecha]) byDia[t.fecha] = { tickets: 0, ventas: 0 };
@@ -125,7 +160,6 @@ export function computeOverview(sucursalFilter?: string): OverviewStats {
     .sort((a, b) => a.fecha.localeCompare(b.fecha))
     .slice(-30);
 
-  // Ventas por categoría
   const byCategoria: Record<string, number> = {};
   tickets.forEach((t) =>
     t.productos.forEach((p) => {
@@ -137,23 +171,19 @@ export function computeOverview(sucursalFilter?: string): OverviewStats {
     .map(([categoria, ventas]) => ({
       categoria,
       ventas,
-      porcentaje: (ventas / totalVentasCat) * 100,
+      porcentaje: totalVentasCat ? (ventas / totalVentasCat) * 100 : 0,
     }))
     .sort((a, b) => b.ventas - a.ventas);
 
   return { ventasTotales, numTickets, ticketPromedio, productosUnicos, ticketsPorDia, ventasPorCategoria };
 }
 
-// ── Canasta ───────────────────────────────────────────────────────────────
-export function computeCanasta(sucursalFilter?: string): CanastaStats {
-  let tickets = generateMockTickets();
-  if (sucursalFilter && sucursalFilter !== "todas") {
-    tickets = tickets.filter((t) => t.sucursal_id === sucursalFilter);
-  }
-
+// ── Canasta ───────────────────────────────────────────────────────────────────
+export function computeCanasta(allTickets: Ticket[], sucursalFilter?: string): CanastaStats {
+  const tickets = filtrarPorSucursal(allTickets, sucursalFilter);
   const totalTickets = tickets.length;
+  const nombres = nombrePorId(tickets);
 
-  // Penetración
   const penetracionMap: Record<string, { count: number; ventas: number }> = {};
   tickets.forEach((t) => {
     const seen = new Set<string>();
@@ -167,20 +197,19 @@ export function computeCanasta(sucursalFilter?: string): CanastaStats {
     });
   });
 
-  const penetracionPorProducto: PenetracionProducto[] = PRODUCTOS_BASE.map((prod) => ({
-    id: prod.id,
-    nombre: prod.nombre,
-    categoria: prod.categoria,
-    penetracion: penetracionMap[prod.id]
-      ? (penetracionMap[prod.id].count / totalTickets) * 100
-      : 0,
-    ventas: penetracionMap[prod.id]?.ventas || 0,
-    numTickets: penetracionMap[prod.id]?.count || 0,
-  })).sort((a, b) => b.penetracion - a.penetracion);
+  const penetracionPorProducto: PenetracionProducto[] = productosDeTickets(tickets)
+    .map((prod) => ({
+      id: prod.id,
+      nombre: prod.nombre,
+      categoria: prod.categoria,
+      penetracion: totalTickets ? (penetracionMap[prod.id]?.count ?? 0) / totalTickets * 100 : 0,
+      ventas: penetracionMap[prod.id]?.ventas || 0,
+      numTickets: penetracionMap[prod.id]?.count || 0,
+    }))
+    .sort((a, b) => b.penetracion - a.penetracion);
 
   const topPenetracion = penetracionPorProducto.slice(0, 10);
 
-  // Co-ocurrencia (top pairs)
   const coocMap: Record<string, number> = {};
   tickets.forEach((t) => {
     const ids = Array.from(new Set(t.productos.map((p) => p.id))).sort();
@@ -195,15 +224,13 @@ export function computeCanasta(sucursalFilter?: string): CanastaStats {
   const topCoOcurrencia: CoOcurrencia[] = Object.entries(coocMap)
     .map(([key, count]) => {
       const [id1, id2] = key.split("__");
-      const p1 = PRODUCTOS_BASE.find((p) => p.id === id1);
-      const p2 = PRODUCTOS_BASE.find((p) => p.id === id2);
       return {
         producto1: id1,
         producto2: id2,
-        nombre1: p1?.nombre || id1,
-        nombre2: p2?.nombre || id2,
+        nombre1: nombres.get(id1) || id1,
+        nombre2: nombres.get(id2) || id2,
         frecuencia: count,
-        soporte: (count / totalTickets) * 100,
+        soporte: totalTickets ? (count / totalTickets) * 100 : 0,
       };
     })
     .sort((a, b) => b.frecuencia - a.frecuencia)
@@ -212,13 +239,9 @@ export function computeCanasta(sucursalFilter?: string): CanastaStats {
   return { topPenetracion, topCoOcurrencia, penetracionPorProducto };
 }
 
-// ── Productos ─────────────────────────────────────────────────────────────
-export function computeProductos(sucursalFilter?: string): ProductoStats[] {
-  let tickets = generateMockTickets();
-  if (sucursalFilter && sucursalFilter !== "todas") {
-    tickets = tickets.filter((t) => t.sucursal_id === sucursalFilter);
-  }
-
+// ── Productos ───────────────────────────────────────────────────────────────────
+export function computeProductos(allTickets: Ticket[], sucursalFilter?: string): ProductoStats[] {
+  const tickets = filtrarPorSucursal(allTickets, sucursalFilter);
   const totalTickets = tickets.length;
   const statsMap: Record<string, { ventas: number; unidades: number; ticketCount: number }> = {};
 
@@ -235,33 +258,32 @@ export function computeProductos(sucursalFilter?: string): ProductoStats[] {
     });
   });
 
-  return PRODUCTOS_BASE.map((prod) => {
-    const s = statsMap[prod.id] || { ventas: 0, unidades: 0, ticketCount: 0 };
-    const penetracion = (s.ticketCount / totalTickets) * 100;
-    const margenPesos = s.ventas * prod.margen;
-    let oportunidad: "alta" | "media" | "baja" = "baja";
-    if (prod.margen > 0.25 && penetracion < 20) oportunidad = "alta";
-    else if (prod.margen > 0.20 && penetracion < 30) oportunidad = "media";
-    return {
-      id: prod.id,
-      nombre: prod.nombre,
-      categoria: prod.categoria,
-      ventas: s.ventas,
-      unidades: s.unidades,
-      penetracion,
-      margen: prod.margen,
-      margenPesos,
-      oportunidad,
-    };
-  }).sort((a, b) => b.ventas - a.ventas);
+  return productosDeTickets(tickets)
+    .map((prod) => {
+      const s = statsMap[prod.id] || { ventas: 0, unidades: 0, ticketCount: 0 };
+      const penetracion = totalTickets ? (s.ticketCount / totalTickets) * 100 : 0;
+      const margenPesos = s.ventas * prod.margen;
+      let oportunidad: "alta" | "media" | "baja" = "baja";
+      if (prod.margen > 0.25 && penetracion < 20) oportunidad = "alta";
+      else if (prod.margen > 0.2 && penetracion < 30) oportunidad = "media";
+      return {
+        id: prod.id,
+        nombre: prod.nombre,
+        categoria: prod.categoria,
+        ventas: s.ventas,
+        unidades: s.unidades,
+        penetracion,
+        margen: prod.margen,
+        margenPesos,
+        oportunidad,
+      };
+    })
+    .sort((a, b) => b.ventas - a.ventas);
 }
 
-// ── Clientes ──────────────────────────────────────────────────────────────
-export function computeClientes(sucursalFilter?: string) {
-  let tickets = generateMockTickets();
-  if (sucursalFilter && sucursalFilter !== "todas") {
-    tickets = tickets.filter((t) => t.sucursal_id === sucursalFilter);
-  }
+// ── Clientes ───────────────────────────────────────────────────────────────────
+export function computeClientes(allTickets: Ticket[], sucursalFilter?: string) {
+  const tickets = filtrarPorSucursal(allTickets, sucursalFilter);
 
   const clienteMap: Record<string, { visitas: number; totalGasto: number; fechas: string[] }> = {};
   tickets.forEach((t) => {
@@ -277,9 +299,10 @@ export function computeClientes(sucursalFilter?: string) {
     id,
     visitas: data.visitas,
     totalGasto: data.totalGasto,
-    ticketPromedio: data.totalGasto / data.visitas,
+    ticketPromedio: data.visitas ? data.totalGasto / data.visitas : 0,
   }));
 
+  const totalClientes = clientes.length;
   const frecuentes = clientes.filter((c) => c.visitas >= 5);
   const ocasionales = clientes.filter((c) => c.visitas >= 2 && c.visitas < 5);
   const nuevos = clientes.filter((c) => c.visitas === 1);
@@ -287,25 +310,27 @@ export function computeClientes(sucursalFilter?: string) {
   const avg = (arr: typeof clientes, key: keyof typeof clientes[0]) =>
     arr.length ? arr.reduce((s, c) => s + (c[key] as number), 0) / arr.length : 0;
 
+  const pct = (n: number) => (totalClientes ? (n / totalClientes) * 100 : 0);
+
   const segmentos: ClienteSegmento[] = [
     {
       segmento: "Frecuente",
       count: frecuentes.length,
-      porcentaje: (frecuentes.length / clientes.length) * 100,
+      porcentaje: pct(frecuentes.length),
       ticketPromedio: avg(frecuentes, "ticketPromedio"),
       frecuenciaPromedio: avg(frecuentes, "visitas"),
     },
     {
       segmento: "Ocasional",
       count: ocasionales.length,
-      porcentaje: (ocasionales.length / clientes.length) * 100,
+      porcentaje: pct(ocasionales.length),
       ticketPromedio: avg(ocasionales, "ticketPromedio"),
       frecuenciaPromedio: avg(ocasionales, "visitas"),
     },
     {
       segmento: "Nuevo",
       count: nuevos.length,
-      porcentaje: (nuevos.length / clientes.length) * 100,
+      porcentaje: pct(nuevos.length),
       ticketPromedio: avg(nuevos, "ticketPromedio"),
       frecuenciaPromedio: 1,
     },
@@ -329,21 +354,18 @@ export function computeClientes(sucursalFilter?: string) {
       color: tipo.color,
       count: new Set(tipoTickets.map((t) => t.cliente_id)).size,
       numTickets: tipoTickets.length,
-      porcentaje: (tipoTickets.length / tickets.length) * 100,
+      porcentaje: tickets.length ? (tipoTickets.length / tickets.length) * 100 : 0,
     };
   });
 
-  return { segmentos, frecuenciaGlobal, ticketPromedioGlobal, distribucion, totalClientes: clientes.length, tipoBreakdown };
+  return { segmentos, frecuenciaGlobal, ticketPromedioGlobal, distribucion, totalClientes, tipoBreakdown };
 }
 
-// ── Clientes por Tipo ──────────────────────────────────────────────────────
-export function computeClientesPorTipo(sucursalFilter?: string): TipoClienteStats[] {
-  // AWS Lambda: GET /api/clientes?view=tipos
-  let tickets = generateMockTickets();
-  if (sucursalFilter && sucursalFilter !== "todas") {
-    tickets = tickets.filter((t) => t.sucursal_id === sucursalFilter);
-  }
+// ── Clientes por Tipo ───────────────────────────────────────────────────────────
+export function computeClientesPorTipo(allTickets: Ticket[], sucursalFilter?: string): TipoClienteStats[] {
+  const tickets = filtrarPorSucursal(allTickets, sucursalFilter);
   const totalTickets = tickets.length;
+  const nombres = nombrePorId(tickets);
 
   return TIPOS_CLIENTE.map((tipo) => {
     const tipoTickets = tickets.filter((t) => t.tipo_cliente === tipo.id);
@@ -352,7 +374,6 @@ export function computeClientesPorTipo(sucursalFilter?: string): TipoClienteStat
     const numTickets = tipoTickets.length;
     const numClientes = clientesUnicos.size;
 
-    // Frequency: tickets per unique client
     const clienteVisitas: Record<string, number> = {};
     tipoTickets.forEach((t) => {
       clienteVisitas[t.cliente_id] = (clienteVisitas[t.cliente_id] || 0) + 1;
@@ -361,7 +382,6 @@ export function computeClientesPorTipo(sucursalFilter?: string): TipoClienteStat
       ? Object.values(clienteVisitas).reduce((s, v) => s + v, 0) / numClientes
       : 0;
 
-    // Top products by penetration within this type
     const prodCount: Record<string, number> = {};
     tipoTickets.forEach((t) => {
       const seenInTicket = new Set<string>();
@@ -374,13 +394,12 @@ export function computeClientesPorTipo(sucursalFilter?: string): TipoClienteStat
     });
     const topProductos = Object.entries(prodCount)
       .map(([id, count]) => ({
-        nombre: PRODUCTOS_BASE.find((p) => p.id === id)?.nombre || id,
+        nombre: nombres.get(id) || id,
         penetracion: numTickets > 0 ? (count / numTickets) * 100 : 0,
       }))
       .sort((a, b) => b.penetracion - a.penetracion)
       .slice(0, 5);
 
-    // Top categories
     const catMap: Record<string, number> = {};
     tipoTickets.forEach((t) =>
       t.productos.forEach((p) => {
@@ -416,15 +435,19 @@ export function computeClientesPorTipo(sucursalFilter?: string): TipoClienteStat
   });
 }
 
-// ── Sucursales ────────────────────────────────────────────────────────────
-export function computeSucursales(): SucursalStats[] {
-  const tickets = generateMockTickets();
+// ── Sucursales ──────────────────────────────────────────────────────────────────
+export function computeSucursales(tickets: Ticket[]): SucursalStats[] {
+  const nombres = nombrePorId(tickets);
 
-  return SUCURSALES.map((suc) => {
-    const sucTickets = tickets.filter((t) => t.sucursal_id === suc.id);
+  // Universo de sucursales derivado de los propios tickets.
+  const sucMap = new Map<string, string>();
+  for (const t of tickets) if (!sucMap.has(t.sucursal_id)) sucMap.set(t.sucursal_id, t.sucursal_nombre);
+
+  return Array.from(sucMap.entries()).map(([id, nombre]) => {
+    const sucTickets = tickets.filter((t) => t.sucursal_id === id);
     const ventasTotales = sucTickets.reduce((s, t) => s + t.total, 0);
     const numTickets = sucTickets.length;
-    const ticketPromedio = ventasTotales / numTickets;
+    const ticketPromedio = numTickets ? ventasTotales / numTickets : 0;
 
     const productosSet = new Set<string>();
     const clientesSet = new Set<string>();
@@ -439,11 +462,11 @@ export function computeSucursales(): SucursalStats[] {
     });
 
     const topProductoId = Object.entries(productCount).sort((a, b) => b[1] - a[1])[0]?.[0];
-    const topProducto = PRODUCTOS_BASE.find((p) => p.id === topProductoId)?.nombre || "";
+    const topProducto = topProductoId ? nombres.get(topProductoId) || topProductoId : "";
 
     return {
-      id: suc.id,
-      nombre: suc.nombre,
+      id,
+      nombre,
       ventasTotales,
       numTickets,
       ticketPromedio,
@@ -454,15 +477,12 @@ export function computeSucursales(): SucursalStats[] {
   });
 }
 
-// ── Auto Insights ─────────────────────────────────────────────────────────
-export function computeInsights(sucursalFilter?: string): AutoInsight[] {
-  const canasta = computeCanasta(sucursalFilter);
-  const productos = computeProductos(sucursalFilter);
-  const sucursales = computeSucursales();
-  let tickets = generateMockTickets();
-  if (sucursalFilter && sucursalFilter !== "todas") {
-    tickets = tickets.filter((t) => t.sucursal_id === sucursalFilter);
-  }
+// ── Auto Insights ───────────────────────────────────────────────────────────────
+export function computeInsights(allTickets: Ticket[], sucursalFilter?: string): AutoInsight[] {
+  const canasta = computeCanasta(allTickets, sucursalFilter);
+  const productos = computeProductos(allTickets, sucursalFilter);
+  const sucursales = computeSucursales(allTickets);
+  const tickets = filtrarPorSucursal(allTickets, sucursalFilter);
   const totalTickets = tickets.length;
 
   const insights: AutoInsight[] = [];
@@ -506,7 +526,7 @@ export function computeInsights(sucursalFilter?: string): AutoInsight[] {
     });
   });
 
-  // Insight 3: High margin, low penetration
+  // Insight 3: High margin, low penetration (requiere catálogo de márgenes)
   const oportunidades = productos.filter((p) => p.oportunidad === "alta").slice(0, 2);
   oportunidades.forEach((prod, i) => {
     insights.push({
@@ -523,70 +543,43 @@ export function computeInsights(sucursalFilter?: string): AutoInsight[] {
     });
   });
 
-  // Insight 4: Branch comparison
-  const sucursalesStats = sucursales.sort((a, b) => b.ticketPromedio - a.ticketPromedio);
-  const topSucursal = sucursalesStats[0];
-  const bottomSucursal = sucursalesStats[sucursalesStats.length - 1];
-  const gap = topSucursal.ticketPromedio - bottomSucursal.ticketPromedio;
+  // Insight 4: Branch comparison (requiere ≥2 sucursales con datos)
+  if (sucursales.length >= 2) {
+    const sucursalesStats = [...sucursales].sort((a, b) => b.ticketPromedio - a.ticketPromedio);
+    const topSucursal = sucursalesStats[0];
+    const bottomSucursal = sucursalesStats[sucursalesStats.length - 1];
+    const gap = topSucursal.ticketPromedio - bottomSucursal.ticketPromedio;
 
-  insights.push({
-    id: "insight-sucursal-1",
-    tipo: "sucursal",
-    titulo: `Sucursal ${topSucursal.nombre} lidera con ticket promedio $${topSucursal.ticketPromedio.toFixed(2)}`,
-    descripcion: `Existe una brecha de $${gap.toFixed(2)} MXN entre ${topSucursal.nombre} y ${bottomSucursal.nombre}. Replicar el mix de productos y estrategia de exhibición de ${topSucursal.nombre} en sucursales rezagadas.`,
-    impacto: "alto",
-    accion: `Analizar planograma de Sucursal ${topSucursal.nombre} y replicar en ${bottomSucursal.nombre}`,
-    datos: [
-      { valor: topSucursal.ticketPromedio, label: `Ticket promedio ${topSucursal.nombre}` },
-      { valor: bottomSucursal.ticketPromedio, label: `Ticket promedio ${bottomSucursal.nombre}` },
-    ],
-  });
-
-  // Insight 5: Recurrence opportunity
-  const bajasFrec = sucursalesStats.filter((s) => s.numTickets < totalTickets * 0.18);
-  if (bajasFrec.length > 0) {
-    const suc = bajasFrec[0];
     insights.push({
-      id: "insight-sucursal-2",
+      id: "insight-sucursal-1",
       tipo: "sucursal",
-      titulo: `Sucursal ${suc.nombre}: ticket alto, baja recurrencia`,
-      descripcion: `${suc.nombre} tiene un ticket promedio competitivo de $${suc.ticketPromedio.toFixed(2)} pero menor frecuencia de visitas. Oportunidad clara de programa de fidelización.`,
-      impacto: "medio",
-      accion: "Implementar tarjeta de puntos o promoción de regreso en Sucursal " + suc.nombre,
+      titulo: `Sucursal ${topSucursal.nombre} lidera con ticket promedio $${topSucursal.ticketPromedio.toFixed(2)}`,
+      descripcion: `Existe una brecha de $${gap.toFixed(2)} MXN entre ${topSucursal.nombre} y ${bottomSucursal.nombre}. Replicar el mix de productos y estrategia de exhibición de ${topSucursal.nombre} en sucursales rezagadas.`,
+      impacto: "alto",
+      accion: `Analizar planograma de Sucursal ${topSucursal.nombre} y replicar en ${bottomSucursal.nombre}`,
       datos: [
-        { valor: suc.numTickets, label: "Tickets totales" },
-        { valor: suc.ticketPromedio, label: "Ticket promedio MXN" },
+        { valor: topSucursal.ticketPromedio, label: `Ticket promedio ${topSucursal.nombre}` },
+        { valor: bottomSucursal.ticketPromedio, label: `Ticket promedio ${bottomSucursal.nombre}` },
       ],
     });
+
+    const bajasFrec = sucursalesStats.filter((s) => s.numTickets < totalTickets * 0.18);
+    if (bajasFrec.length > 0) {
+      const suc = bajasFrec[0];
+      insights.push({
+        id: "insight-sucursal-2",
+        tipo: "sucursal",
+        titulo: `Sucursal ${suc.nombre}: ticket alto, baja recurrencia`,
+        descripcion: `${suc.nombre} tiene un ticket promedio competitivo de $${suc.ticketPromedio.toFixed(2)} pero menor frecuencia de visitas. Oportunidad clara de programa de fidelización.`,
+        impacto: "medio",
+        accion: "Implementar tarjeta de puntos o promoción de regreso en Sucursal " + suc.nombre,
+        datos: [
+          { valor: suc.numTickets, label: "Tickets totales" },
+          { valor: suc.ticketPromedio, label: "Ticket promedio MXN" },
+        ],
+      });
+    }
   }
-
-  // Insight 6: Tendencia — category with highest growth
-  insights.push({
-    id: "insight-tendencia-1",
-    tipo: "tendencia",
-    titulo: "Higiene Personal: categoría de mayor crecimiento relativo",
-    descripcion: `Los productos de Higiene Personal muestran márgenes promedio del 29% frente al 20% del total de categorías. Aumentar el surtido y la presencia en anaquel puede generar un diferencial competitivo sostenible.`,
-    impacto: "medio",
-    accion: "Ampliar el surtido de Higiene Personal con SKUs premium de mayor margen",
-    datos: [
-      { valor: 29, label: "Margen promedio Higiene %" },
-      { valor: 20, label: "Margen promedio total %" },
-    ],
-  });
-
-  // Insight: client type opportunity
-  insights.push({
-    id: "insight-tipo-1",
-    tipo: "oportunidad",
-    titulo: "Taqueros y restauranteros: segmento de alto valor subestimado",
-    descripcion: `Los taqueros y restauranteros representan ~13% de los clientes pero con un ticket promedio 30-80% mayor que el tendero promedio. Crear un programa de cuenta mayorista diferenciado puede incrementar las ventas a este segmento en un 25%.`,
-    impacto: "alto",
-    accion: "Diseñar catálogo y precios especiales para clientes de giro restaurantero",
-    datos: [
-      { valor: 13, label: "% de clientes en giro de alimentos" },
-      { valor: 25, label: "% incremento potencial en ventas" },
-    ],
-  });
 
   return insights;
 }

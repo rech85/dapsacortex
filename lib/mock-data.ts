@@ -96,7 +96,7 @@ export interface Ticket {
   sucursal_nombre: string;
   fecha: string;
   cliente_id: string;
-  tipo_cliente: "tendero" | "taquero" | "ama_de_casa" | "restaurantero";
+  tipo_cliente: "tendero" | "taquero" | "ama_de_casa" | "restaurantero" | "desconocido";
   productos: ProductoTicket[];
   total: number;
 }
